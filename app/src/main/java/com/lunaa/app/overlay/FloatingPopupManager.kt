@@ -1,60 +1,67 @@
 package com.lunaa.app.overlay
 
 import android.content.Context
+import android.content.Intent
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.os.Build
 import android.view.Gravity
-import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
-import com.lunaa.app.R
+import com.lunaa.app.service.LunaaCallService
+import kotlin.math.abs
 
 class FloatingPopupManager(private val context: Context) {
-    private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+    private val windowManager =
+        context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var floatingView: View? = null
-    private var isExpanded = false
     private var onExpandToggleListener: (() -> Unit)? = null
 
-    fun showAvatarOverlay(avatarUrl: String, onToggle: () -> Unit) {
-        if (floatingView != null) return
-        onExpandToggleListener = onToggle
-
-        val layoutParamsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    private fun overlayType(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        val params = WindowManager.LayoutParams(
+    private fun baseParams(): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            layoutParamsType,
+            overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        ).apply {
+        )
+
+    fun showAvatarOverlay(avatarUrl: String, onToggle: () -> Unit) {
+        if (floatingView != null) return
+        onExpandToggleListener = onToggle
+
+        val params = baseParams().apply {
             gravity = Gravity.TOP or Gravity.START
             x = 100
             y = 200
         }
 
-        // Create simple floating layout programmatically to avoid complex XML inflation if needed
-        val view = View.inflate(context, android.R.layout.activity_list_item, null) // or custom view
-        // For simplicity, let's build custom container view
-        val container = android.widget.FrameLayout(context).apply {
+        val container = FrameLayout(context).apply {
             background = context.getDrawable(android.R.drawable.dialog_holo_dark_frame)
             setPadding(12, 12, 12, 12)
         }
 
         val imageView = ImageView(context).apply {
             setImageResource(android.R.drawable.ic_menu_camera)
-            layoutParams = android.widget.FrameLayout.LayoutParams(120, 120)
+            layoutParams = FrameLayout.LayoutParams(120, 120)
         }
         container.addView(imageView)
 
-        // Touch listener for dragging
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
@@ -72,13 +79,12 @@ class FloatingPopupManager(private val context: Context) {
                 MotionEvent.ACTION_MOVE -> {
                     params.x = initialX + (event.rawX - initialTouchX).toInt()
                     params.y = initialY + (event.rawY - initialTouchY).toInt()
-                    windowManager.updateViewLayout(floatingView, params)
+                    windowManager.updateViewLayout(container, params)
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    // Tap action to expand/collapse
-                    val diffX = Math.abs(event.rawX - initialTouchX)
-                    val diffY = Math.abs(event.rawY - initialTouchY)
+                    val diffX = abs(event.rawX - initialTouchX)
+                    val diffY = abs(event.rawY - initialTouchY)
                     if (diffX < 10 && diffY < 10) {
                         onExpandToggleListener?.invoke()
                     }
@@ -89,82 +95,64 @@ class FloatingPopupManager(private val context: Context) {
         }
 
         floatingView = container
-        windowManager.addView(floatingView, params)
+        windowManager.addView(container, params)
     }
 
     fun showRejoinPopup(roomId: String, preset: String) {
         if (floatingView != null) return
 
-        val layoutParamsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            layoutParamsType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
+        val params = baseParams().apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             x = 0
             y = 150
         }
 
-        val container = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
+        val container = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
             background = context.getDrawable(android.R.drawable.dialog_holo_dark_frame)
             setPadding(24, 20, 24, 20)
             elevation = 16f
         }
 
-        val titleView = TextView(context).apply {
+        container.addView(TextView(context).apply {
             text = "Tham gia lại RoomID: $roomId"
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(Color.WHITE)
             textSize = 14f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-        }
-        container.addView(titleView)
+            setTypeface(null, Typeface.BOLD)
+        })
 
-        val subView = TextView(context).apply {
+        container.addView(TextView(context).apply {
             text = "Bấm để tham gia lại hoặc từ chối"
-            setTextColor(android.graphics.Color.LTGRAY)
+            setTextColor(Color.LTGRAY)
             textSize = 12f
             setPadding(0, 4, 0, 10)
-        }
-        container.addView(subView)
+        })
 
-        val buttonLayout = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
+        val buttonLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
         }
 
-        val btnDecline = android.widget.Button(context).apply {
+        buttonLayout.addView(Button(context).apply {
             text = "Từ chối"
             textSize = 12f
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(Color.WHITE)
             background = context.getDrawable(android.R.drawable.btn_default)
-            setOnClickListener {
-                removeOverlay()
-            }
-        }
-        buttonLayout.addView(btnDecline)
+            setOnClickListener { removeOverlay() }
+        })
 
-        val space = android.view.View(context).apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(16, 0)
-        }
-        buttonLayout.addView(space)
+        buttonLayout.addView(View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(16, 0)
+        })
 
-        val btnAccept = android.widget.Button(context).apply {
+        buttonLayout.addView(Button(context).apply {
             text = "Tham gia"
             textSize = 12f
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(Color.WHITE)
             background = context.getDrawable(android.R.drawable.btn_default)
             setOnClickListener {
-                val intent = android.content.Intent(context, com.lunaa.app.service.LunaaCallService::class.java).apply {
-                    action = com.lunaa.app.service.LunaaCallService.ACTION_START_CALL
+                val intent = Intent(context, LunaaCallService::class.java).apply {
+                    action = LunaaCallService.ACTION_START_CALL
                     putExtra("ROOM_ID", roomId)
                     putExtra("PRESET", preset)
                 }
@@ -175,12 +163,21 @@ class FloatingPopupManager(private val context: Context) {
                 }
                 removeOverlay()
             }
-        }
-        buttonLayout.addView(btnAccept)
+        })
 
         container.addView(buttonLayout)
 
         floatingView = container
-        windowManager.addView(floatingView, params)
+        windowManager.addView(container, params)
+    }
+
+    fun removeOverlay() {
+        val view = floatingView ?: return
+        try {
+            windowManager.removeView(view)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        floatingView = null
     }
 }
