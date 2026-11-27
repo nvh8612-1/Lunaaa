@@ -25,19 +25,15 @@ class RtcEngine(
     }
 
     private fun initPeerConnectionFactory() {
-        val initializationOptions = PeerConnectionFactory.InitializationOptions.builder(context)
+        val initOptions = PeerConnectionFactory.InitializationOptions.builder(context)
             .setEnableInternalTracer(true)
             .createInitializationOptions()
-        PeerConnectionFactory.initialize(initializationOptions)
-
-        val options = PeerConnectionFactory.Options()
-        val defaultVideoEncoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
-        val defaultVideoDecoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+        PeerConnectionFactory.initialize(initOptions)
 
         peerConnectionFactory = PeerConnectionFactory.builder()
-            .setOptions(options)
-            .setVideoEncoderFactory(defaultVideoEncoderFactory)
-            .setVideoDecoderFactory(defaultVideoDecoderFactory)
+            .setOptions(PeerConnectionFactory.Options())
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
     }
 
@@ -52,7 +48,7 @@ class RtcEngine(
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {}
             override fun onIceConnectionReceivingChange(p0: Boolean) {}
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
-            
+
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let { listener.onIceCandidateGenerated(it) }
             }
@@ -69,70 +65,54 @@ class RtcEngine(
             }
         })
 
-        // Create Audio Track for Mic Call
-        val audioConstraints = MediaConstraints()
-        val audioSource = peerConnectionFactory?.createAudioSource(audioConstraints)
+        val audioSource = peerConnectionFactory?.createAudioSource(MediaConstraints())
         audioTrack = peerConnectionFactory?.createAudioTrack("LunaaAudioTrack", audioSource)
         audioTrack?.let { peerConnection?.addTrack(it, listOf("lunaa_stream")) }
     }
 
     fun addVideoTrack(track: VideoTrack) {
         videoTrack = track
-        videoTrack?.let { peerConnection?.addTrack(it, listOf("lunaa_stream")) }
+        peerConnection?.addTrack(track, listOf("lunaa_stream"))
     }
 
     fun createOffer() {
-        val constraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
-        }
         peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
-                desc?.let {
-                    peerConnection?.setLocalDescription(object : SdpObserver {
-                        override fun onCreateSuccess(p0: SessionDescription?) {}
-                        override fun onSetSuccess() { listener.onLocalDescriptionCreated(desc) }
-                        override fun onCreateFailure(p0: String?) {}
-                        override fun onSetFailure(p0: String?) {}
-                    }, it)
-                }
+                if (desc != null) setLocal(desc)
             }
             override fun onSetSuccess() {}
-            override fun onCreateFailure(p0: String?) {}
-            override fun onSetFailure(p0: String?) {}
-        }, constraints)
+            override fun onCreateFailure(error: String?) { Log.e(TAG, "createOffer failed: $error") }
+            override fun onSetFailure(error: String?) {}
+        }, offerConstraints())
     }
 
     fun createAnswer() {
-        val constraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
-        }
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
-                desc?.let {
-                    peerConnection?.setLocalDescription(object : SdpObserver {
-                        override fun onCreateSuccess(p0: SessionDescription?) {}
-                        override fun onSetSuccess() { listener.onLocalDescriptionCreated(desc) }
-                        override fun onCreateFailure(p0: String?) {}
-                        override fun onSetFailure(p0: String?) {}
-                    }, it)
-                }
+                if (desc != null) setLocal(desc)
             }
             override fun onSetSuccess() {}
-            override fun onCreateFailure(p0: String?) {}
-            override fun onSetFailure(p0: String?) {}
-        }, constraints)
+            override fun onCreateFailure(error: String?) { Log.e(TAG, "createAnswer failed: $error") }
+            override fun onSetFailure(error: String?) {}
+        }, offerConstraints())
+    }
+
+    private fun setLocal(desc: SessionDescription) {
+        peerConnection?.setLocalDescription(object : SdpObserver {
+            override fun onCreateSuccess(p0: SessionDescription?) {}
+            override fun onSetSuccess() { listener.onLocalDescriptionCreated(desc) }
+            override fun onCreateFailure(error: String?) {}
+            override fun onSetFailure(error: String?) { Log.e(TAG, "setLocalDescription failed: $error") }
+        }, desc)
     }
 
     fun setRemoteDescription(type: SessionDescription.Type, sdp: String) {
-        val desc = SessionDescription(type, sdp)
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(p0: SessionDescription?) {}
-            override fun onSetSuccess() { Log.d(TAG, "Remote description set successfully") }
-            override fun onCreateFailure(p0: String?) {}
-            override fun onSetFailure(p0: String?) {}
-        }, desc)
+            override fun onSetSuccess() { Log.d(TAG, "Remote description set") }
+            override fun onCreateFailure(error: String?) {}
+            override fun onSetFailure(error: String?) { Log.e(TAG, "setRemoteDescription failed: $error") }
+        }, SessionDescription(type, sdp))
     }
 
     fun addIceCandidate(candidate: IceCandidate) {
@@ -144,12 +124,19 @@ class RtcEngine(
     fun dispose() {
         try {
             peerConnection?.dispose()
+            peerConnection = null
             peerConnectionFactory?.dispose()
+            peerConnectionFactory = null
             eglBase.release()
         } catch (e: Exception) {
             e.printStackTrace()
         }
         Log.d(TAG, "RtcEngine disposed")
+    }
+
+    private fun offerConstraints(): MediaConstraints = MediaConstraints().apply {
+        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
     }
 
     companion object {
