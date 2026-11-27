@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.helloapp"
+    namespace = "com.example.lunaa"
     compileSdk = 34
 
     defaultConfig {
