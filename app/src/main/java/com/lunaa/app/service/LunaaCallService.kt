@@ -3,16 +3,18 @@ package com.lunaa.app.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
-import com.lunaa.app.R
-import com.lunaa.app.webrtc.RtcEngine
+import com.lunaa.app.overlay.FloatingPopupManager
 import com.lunaa.app.signaling.SupabaseSignaling
+import com.lunaa.app.webrtc.RtcEngine
 import org.json.JSONObject
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
@@ -20,11 +22,16 @@ import org.webrtc.SessionDescription
 
 class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.SignalingListener {
 
-    private var popupManager: com.lunaa.app.overlay.FloatingPopupManager? = null
+    private var popupManager: FloatingPopupManager? = null
     private var signaling: SupabaseSignaling? = null
+    private var rtcEngine: RtcEngine? = null
+
     private var currentRoomId: String = ""
     private var currentPreset: String = "780p"
-    
+
+    // Đặt true khi người dùng chủ động rời phòng, để onDestroy không hiện thông báo "Tham gia lại"
+    private var userLeft = false
+
     private var callSeconds = 0
     private val handler = Handler(Looper.getMainLooper())
     private val timerRunnable = object : Runnable {
@@ -40,7 +47,7 @@ class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.Sig
 
     override fun onCreate() {
         super.onCreate()
-        popupManager = com.lunaa.app.overlay.FloatingPopupManager(this)
+        popupManager = FloatingPopupManager(this)
         startForeground(NOTIFICATION_ID, createNotification("Lunaa Call", "Đang khởi tạo..."))
         callSeconds = 0
         handler.postDelayed(timerRunnable, 1000)
@@ -48,25 +55,38 @@ class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.Sig
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        currentRoomId = intent?.getStringExtra("ROOM_ID") ?: ""
-        currentPreset = intent?.getStringExtra("PRESET") ?: "780p"
+        intent?.getStringExtra("ROOM_ID")?.let { currentRoomId = it }
+        intent?.getStringExtra("PRESET")?.let { currentPreset = it }
 
-        if (action == ACTION_START_CALL) {
-            initWebRtcAndSignaling()
-        } else if (action == ACTION_STOP_CALL) {
-            stopSelf()
+        when (action) {
+            ACTION_START_CALL -> {
+                userLeft = false
+                initWebRtcAndSignaling()
+            }
+            ACTION_STOP_CALL -> {
+                userLeft = true
+                stopSelf()
+            }
+            ACTION_START_SCREEN_SHARE -> {
+                // Chỗ này sẽ dùng MediaProjection (RESULT_CODE, RESULT_DATA) khi bạn triển khai chia sẻ màn hình
+            }
         }
 
         return START_STICKY
     }
 
     private fun initWebRtcAndSignaling() {
-        rtcEngine = RtcEngine(this, this)
-        val iceServers = listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").create(),
-            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").create()
-        )
-        rtcEngine?.createPeerConnection(iceServers)
+        // Dọn kết nối cũ nếu có, tránh rò rỉ khi join lại
+        signaling?.disconnect()
+        rtcEngine?.dispose()
+
+        rtcEngine = RtcEngine(this, this).also { engine ->
+            val iceServers = listOf(
+                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+                PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
+            )
+            engine.createPeerConnection(iceServers)
+        }
 
         signaling = SupabaseSignaling(
             supabaseUrl = "https://aakjtgtfrlsqhghjvdmt.supabase.co",
@@ -104,8 +124,7 @@ class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.Sig
 
     private fun updateNotification(title: String, message: String) {
         val notification = createNotification(title, message)
-        val manager = getSystemService(NotificationManager::class.java)
-        manager?.notify(NOTIFICATION_ID, notification)
+        getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification)
     }
 
     private fun sendRejoinNotification() {
@@ -123,23 +142,19 @@ class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.Sig
             manager?.createNotificationChannel(channel)
         }
 
-        // Direct service restart action intent for Accept (Join)
-        val intentAccept = Intent(this, LunaaCallService::class.java).apply {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
+        val acceptIntent = Intent(this, LunaaCallService::class.java).apply {
             action = ACTION_START_CALL
             putExtra("ROOM_ID", currentRoomId)
             putExtra("PRESET", currentPreset)
         }
-        val pendingIntentAccept = android.app.PendingIntent.getService(
-            this, 0, intentAccept, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
+        val pendingAccept = PendingIntent.getService(this, 0, acceptIntent, flags)
 
-        // Action intent for Decline (Dismiss notification/popup)
-        val intentDecline = Intent(this, LunaaCallService::class.java).apply {
+        val declineIntent = Intent(this, LunaaCallService::class.java).apply {
             action = ACTION_STOP_CALL
         }
-        val pendingIntentDecline = android.app.PendingIntent.getService(
-            this, 1, intentDecline, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
+        val pendingDecline = PendingIntent.getService(this, 1, declineIntent, flags)
 
         val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("Tham gia lại RoomID: $currentRoomId")
@@ -147,23 +162,24 @@ class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.Sig
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Từ chối", pendingIntentDecline)
-            .addAction(android.R.drawable.ic_menu_call, "Tham gia", pendingIntentAccept)
-            .setContentIntent(pendingIntentAccept)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Từ chối", pendingDecline)
+            .addAction(android.R.drawable.ic_menu_call, "Tham gia", pendingAccept)
+            .setContentIntent(pendingAccept)
             .setAutoCancel(true)
             .build()
 
         manager?.notify(NOTIFICATION_ID + 1, notification)
 
-        // Show floating overlay popup with Decline/Accept buttons if permission granted
         try {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this)) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
                 popupManager?.showRejoinPopup(currentRoomId, currentPreset)
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
+
+    // ---- RtcEngine.RtcListener ----
 
     override fun onLocalDescriptionCreated(sdp: SessionDescription) {
         val data = JSONObject().apply {
@@ -188,22 +204,25 @@ class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.Sig
         }
     }
 
+    // ---- SupabaseSignaling.SignalingListener ----
+
     override fun onMessage(type: String, payload: JSONObject) {
         val data = payload.optJSONObject("data") ?: return
-        if (type == "sdp") {
-            val sdpType = data.optString("type")
-            val sdpSdp = data.optString("sdp")
-            val descType = if (sdpType == "offer") SessionDescription.Type.OFFER else SessionDescription.Type.ANSWER
-            rtcEngine?.setRemoteDescription(descType, sdpSdp)
-            if (descType == SessionDescription.Type.OFFER) {
-                rtcEngine?.createAnswer()
+        when (type) {
+            "sdp" -> {
+                val isOffer = data.optString("type") == "offer"
+                val descType = if (isOffer) SessionDescription.Type.OFFER else SessionDescription.Type.ANSWER
+                rtcEngine?.setRemoteDescription(descType, data.optString("sdp"))
+                if (isOffer) rtcEngine?.createAnswer()
             }
-        } else if (type == "ice") {
-            val sdpMid = data.optString("sdpMid")
-            val sdpMLineIndex = data.optInt("sdpMLineIndex")
-            val candidateStr = data.optString("candidate")
-            val candidate = IceCandidate(sdpMid, sdpMLineIndex, candidateStr)
-            rtcEngine?.addIceCandidate(candidate)
+            "ice" -> {
+                val candidate = IceCandidate(
+                    data.optString("sdpMid"),
+                    data.optInt("sdpMLineIndex"),
+                    data.optString("candidate")
+                )
+                rtcEngine?.addIceCandidate(candidate)
+            }
         }
     }
 
@@ -211,23 +230,30 @@ class LunaaCallService : Service(), RtcEngine.RtcListener, SupabaseSignaling.Sig
         rtcEngine?.createOffer()
     }
 
-    override fun onDisconnected() {}
+    override fun onDisconnected() {
+        // Không làm gì: nếu cần thông báo lại, xử lý ở đây
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        super.onDestroy()
         handler.removeCallbacks(timerRunnable)
         signaling?.disconnect()
         rtcEngine?.dispose()
-        if (currentRoomId.isNotEmpty()) {
+        signaling = null
+        rtcEngine = null
+
+        // Chỉ hiện thông báo khi cuộc gọi bị ngắt ngoài ý muốn
+        if (!userLeft && currentRoomId.isNotEmpty()) {
             sendRejoinNotification()
         }
+        super.onDestroy()
     }
 
     companion object {
         const val ACTION_START_CALL = "ACTION_START_CALL"
         const val ACTION_STOP_CALL = "ACTION_STOP_CALL"
+        const val ACTION_START_SCREEN_SHARE = "ACTION_START_SCREEN_SHARE"
         private const val NOTIFICATION_ID = 1001
     }
 }
