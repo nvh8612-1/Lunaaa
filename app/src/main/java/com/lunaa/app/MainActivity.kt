@@ -3,35 +3,91 @@ package com.lunaa.app
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.view.View
 import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.lunaa.app.bridge.WebAppBridge
 import com.lunaa.app.service.LunaaCallService
+import com.lunaa.app.utils.ShizukuHelper
+import org.json.JSONObject
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoTrack
 
 class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
 
     private lateinit var webView: WebView
-    private var currentPreset: String = "780p"
-    private var currentAvatarUrl: String = ""
+    private lateinit var videoView: SurfaceViewRenderer
+    private var inCall = false
+    private var sharing = false
+    private var remoteTrack: VideoTrack? = null
+    private var videoInited = false
+    private var pendingRoomId: String? = null
+    private var pendingPreset = "780p"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Initialize WebView UI Layer (Super lightweight, pure HTML/CSS/JS)
+        window.setBackgroundDrawable(ColorDrawable(Color.parseColor("#111214")))
+
+        // Lớp dưới: video nhận được. Lớp trên: WebView trong suốt, giao diện nằm đè lên video.
+        videoView = SurfaceViewRenderer(this).apply {
+            setEnableHardwareScaler(true)
+            setMirror(false)
+            visibility = View.GONE
+        }
         webView = WebView(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            webViewClient = WebViewClient()
             addJavascriptInterface(WebAppBridge(this@MainActivity), "AndroidBridge")
             loadUrl("file:///android_asset/ui/index.html")
         }
-        setContentView(webView)
+        setContentView(FrameLayout(this).apply {
+            addView(videoView, FrameLayout.LayoutParams(0, 0))
+            addView(
+                webView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+        })
 
+        LunaaCallService.uiListener = object : LunaaCallService.UiListener {
+            override fun onParticipants(json: String) =
+                runJs("onParticipants(${JSONObject.quote(json)});")
+            override fun onChat(json: String) =
+                runJs("onChatMessage(${JSONObject.quote(json)});")
+            override fun onSpeaker(on: Boolean) =
+                runJs("setSpeakerState($on);")
+            override fun onScreenShare(on: Boolean) {
+                sharing = on
+                runJs("setScreenState($on);")
+            }
+            override fun onRemoteVideo(track: VideoTrack?) = attachRemoteVideo(track)
+        }
+
+        ShizukuHelper.onPermissionResult = { granted ->
+            toast(if (granted) "Shizuku đã cấp quyền cho Lunaa" else "Shizuku đã từ chối quyền")
+        }
         checkAndRequestPermissions()
     }
+
+    private fun hasMic(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
 
     private fun checkAndRequestPermissions() {
         val permissions = mutableListOf(
@@ -42,132 +98,114 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        
-        val missingPermissions = permissions.filter {
+        val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-
-        if (missingPermissions.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), PERMISSION_REQUEST_CODE)
+        if (missing.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQ_PERMISSIONS)
         }
-        
-        // Check Overlay Permission
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
-            // Try Shizuku first to grant overlay automatically if available, otherwise fallback to standard intent
-            if (com.lunaa.app.utils.ShizukuHelper.isShizukuAvailable() && com.lunaa.app.utils.ShizukuHelper.hasPermission()) {
-                com.lunaa.app.utils.ShizukuHelper.grantOverlayPermission(packageName)
+
+        if (!Settings.canDrawOverlays(this)) {
+            if (ShizukuHelper.isShizukuAvailable() && ShizukuHelper.hasPermission()) {
+                ShizukuHelper.grantOverlayPermission(packageName)
             } else {
-                val intent = Intent(
-                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    android.net.Uri.parse("package:$packageName")
+                startActivityForResult(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+                    REQ_OVERLAY
                 )
-                startActivityForResult(intent, OVERLAY_PERMISSION_REQ_CODE)
             }
         }
 
-        // Initialize Shizuku background helper if available
-        if (com.lunaa.app.utils.ShizukuHelper.isShizukuAvailable() && !com.lunaa.app.utils.ShizukuHelper.hasPermission()) {
-            com.lunaa.app.utils.ShizukuHelper.requestPermission()
+        if (ShizukuHelper.isShizukuAvailable() && !ShizukuHelper.hasPermission()) {
+            ShizukuHelper.requestPermission()
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            // Handle permission results if needed
+        if (requestCode == REQ_CALL_AUDIO) {
+            val roomId = pendingRoomId
+            pendingRoomId = null
+            if (roomId != null && hasMic()) {
+                startCall(roomId, pendingPreset)
+            } else if (roomId != null) {
+                toast("Cần quyền micro để vào phòng")
+            }
         }
-    }
-
-    override fun onToggleScreenShare() {
-        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-        val intent = mediaProjectionManager.createScreenCaptureIntent()
-        startActivityForResult(intent, SCREEN_CAPTURE_REQ_CODE)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == SCREEN_CAPTURE_REQ_CODE && resultCode == RESULT_OK && data != null) {
-            // Pass MediaProjection result to service for screen capture & system audio mixing
-            val intent = Intent(this, LunaaCallService::class.java).apply {
+        if (requestCode == REQ_SCREEN && resultCode == RESULT_OK && data != null) {
+            startService(Intent(this, LunaaCallService::class.java).apply {
                 action = LunaaCallService.ACTION_START_SCREEN_SHARE
-                putExtra("RESULT_CODE", resultCode)
                 putExtra("RESULT_DATA", data)
+            })
+        }
+    }
+
+    // Nút Back: nếu đang mở màn hình gọi thì thu nhỏ, không thoát app
+    override fun onBackPressed() {
+        webView.evaluateJavascript("handleBack()") { result ->
+            if (result != "true") {
+                runOnUiThread {
+                    if (webView.canGoBack()) webView.goBack() else finish()
+                }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
+        }
+    }
+
+    private fun runJs(script: String) {
+        runOnUiThread { webView.evaluateJavascript(script, null) }
+    }
+
+    private fun toast(msg: String) {
+        runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+    }
+
+    // Đặt video nhận được lên đúng ô trong giao diện
+    private fun attachRemoteVideo(track: VideoTrack?) {
+        runOnUiThread {
+            remoteTrack?.removeSink(videoView)
+            remoteTrack = track
+            if (track == null) {
+                videoView.visibility = View.GONE
+                return@runOnUiThread
             }
-        }
-    }
-
-    companion object {
-        private const val PERMISSION_REQUEST_CODE = 101
-        private const val OVERLAY_PERMISSION_REQ_CODE = 102
-        private const val SCREEN_CAPTURE_REQ_CODE = 103
-    }
-
-    override fun onUpdateAvatar(avatarUrl: String) {
-        currentAvatarUrl = avatarUrl
-    }
-
-    override fun onSetPreset(preset: String) {
-        currentPreset = preset
-    }
-
-    override fun onUiReady() {
-        // UI ready callback
-    }
-
-    override fun onConnectShizuku() {
-        if (com.lunaa.app.utils.ShizukuHelper.isShizukuAvailable()) {
-            if (!com.lunaa.app.utils.ShizukuHelper.hasPermission()) {
-                com.lunaa.app.utils.ShizukuHelper.requestPermission()
-                android.widget.Toast.makeText(this, "Đang yêu cầu quyền Shizuku...", android.widget.Toast.LENGTH_SHORT).show()
-            } else {
-                android.widget.Toast.makeText(this, "Shizuku đã được kết nối và cấp quyền!", android.widget.Toast.LENGTH_SHORT).show()
+            val ctx = LunaaCallService.eglContext ?: return@runOnUiThread
+            if (!videoInited) {
+                videoView.init(ctx, null)
+                videoInited = true
             }
-        } else {
-            android.widget.Toast.makeText(this, "Không tìm thấy dịch vụ Shizuku trên thiết bị!", android.widget.Toast.LENGTH_LONG).show()
+            track.addSink(videoView)
+            runJs("reportVideoRect();")
         }
     }
 
-    override fun onRoomCreate(roomId: String, preset: String) {
-        checkPermissionAndStartCall(roomId, preset)
+    // ---- WebAppBridge.BridgeCallback (gọi từ JS, luồng nền) ----
+
+    override fun onRoomCreate(roomId: String, preset: String) = joinOrCreate(roomId, preset)
+    override fun onRoomJoin(roomId: String, preset: String) = joinOrCreate(roomId, preset)
+
+    private fun joinOrCreate(roomId: String, preset: String) {
+        if (!hasMic()) {
+            pendingRoomId = roomId
+            pendingPreset = preset
+            runOnUiThread {
+                ActivityCompat.requestPermissions(
+                    this, arrayOf(Manifest.permission.RECORD_AUDIO), REQ_CALL_AUDIO
+                )
+            }
+            return
+        }
+        startCall(roomId, preset)
     }
 
-    override fun onRoomJoin(roomId: String, preset: String) {
-        checkPermissionAndStartCall(roomId, preset)
-    }
-
-    override fun onLeaveRoom() {
-        val intent = Intent(this, LunaaCallService::class.java).apply {
-            action = LunaaCallService.ACTION_STOP_CALL
-        }
-        startService(intent)
-        webView.evaluateJavascript("hideCallControls();", null)
-    }
-
-    private fun checkPermissionAndStartCall(roomId: String, preset: String) {
-        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        val missing = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), PERMISSION_REQUEST_CODE)
-            android.widget.Toast.makeText(this, "Cần cấp quyền Micro và Thông báo để gọi!", android.widget.Toast.LENGTH_SHORT).show()
-        } else {
-            startCallService(roomId, preset)
-            webView.evaluateJavascript("showCallControls('$roomId');", null)
-        }
-    }
-
-    private fun startCallService(roomId: String, preset: String) {
+    private fun startCall(roomId: String, preset: String) {
         val intent = Intent(this, LunaaCallService::class.java).apply {
             action = LunaaCallService.ACTION_START_CALL
             putExtra("ROOM_ID", roomId)
@@ -178,17 +216,120 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
         } else {
             startService(intent)
         }
+        inCall = true
+        runJs("showCallControls(${JSONObject.quote(roomId)});")
+    }
+
+    override fun onLeaveRoom() {
+        if (inCall) {
+            startService(Intent(this, LunaaCallService::class.java).apply {
+                action = LunaaCallService.ACTION_STOP_CALL
+            })
+        }
+        inCall = false
+        sharing = false
+        attachRemoteVideo(null)
+        runOnUiThread {
+            if (videoInited) {
+                videoView.release()
+                videoInited = false
+            }
+        }
+        runJs("hideCallControls();")
+    }
+
+    override fun onToggleScreenShare() {
+        if (!inCall) {
+            toast("Vào phòng trước khi chia sẻ màn hình")
+            return
+        }
+        if (sharing) {
+            startService(Intent(this, LunaaCallService::class.java).apply {
+                action = LunaaCallService.ACTION_STOP_SCREEN_SHARE
+            })
+            return
+        }
+        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_SCREEN)
+    }
+
+    override fun onVideoRect(x: Double, y: Double, w: Double, h: Double) {
+        runOnUiThread {
+            if (w <= 0 || h <= 0 || remoteTrack == null) {
+                videoView.visibility = View.GONE
+                return@runOnUiThread
+            }
+            val d = resources.displayMetrics.density
+            val lp = videoView.layoutParams as FrameLayout.LayoutParams
+            lp.width = (w * d).toInt()
+            lp.height = (h * d).toInt()
+            lp.leftMargin = (x * d).toInt()
+            lp.topMargin = (y * d).toInt()
+            videoView.layoutParams = lp
+            videoView.visibility = View.VISIBLE
+        }
+    }
+
+    override fun onMicToggle(enabled: Boolean) {
+        if (!inCall) return
+        startService(Intent(this, LunaaCallService::class.java).apply {
+            action = LunaaCallService.ACTION_SET_MIC
+            putExtra("MIC_ON", enabled)
+        })
+    }
+
+    override fun onSpeakerToggle(on: Boolean) {
+        if (!inCall) return
+        startService(Intent(this, LunaaCallService::class.java).apply {
+            action = LunaaCallService.ACTION_SET_SPEAKER
+            putExtra("SPEAKER_ON", on)
+        })
+    }
+
+    override fun onSendChat(text: String) {
+        if (!inCall) return
+        startService(Intent(this, LunaaCallService::class.java).apply {
+            action = LunaaCallService.ACTION_SEND_CHAT
+            putExtra("TEXT", text)
+        })
+    }
+
+    override fun onUpdateAvatar(avatarUrl: String) {
+        // Lưu avatar nếu cần sau này
+    }
+
+    override fun onSetPreset(preset: String) {
+        pendingPreset = preset
+    }
+
+    override fun onUiReady() {
+        // Giao diện đã sẵn sàng
+    }
+
+    override fun onConnectShizuku() {
+        when {
+            !ShizukuHelper.isShizukuAvailable() ->
+                toast("Chưa thấy Shizuku. Mở app Shizuku và bấm Start trước")
+            ShizukuHelper.hasPermission() ->
+                toast("Shizuku đã kết nối và có quyền")
+            else -> {
+                ShizukuHelper.requestPermission()
+                toast("Đang xin quyền Shizuku...")
+            }
+        }
     }
 
     override fun onDestroy() {
-        // • BỊ HỦY HOÀN TOÀN (onDestroy -> destroy WebView) khi thoát app để giải phóng 100% RAM giao diện.
-        try {
-            webView.stopLoading()
-            webView.clearCache(true)
-            webView.destroy()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        LunaaCallService.uiListener = null
+        webView.stopLoading()
+        webView.destroy()
         super.onDestroy()
+    }
+
+    companion object {
+        private const val REQ_PERMISSIONS = 101
+        private const val REQ_CALL_AUDIO = 102
+        private const val REQ_OVERLAY = 103
+        private const val REQ_SCREEN = 104
     }
 }

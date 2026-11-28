@@ -9,6 +9,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class SupabaseSignaling(
@@ -17,30 +18,32 @@ class SupabaseSignaling(
     private val roomId: String,
     private val listener: SignalingListener
 ) {
+    // Mã định danh của máy này trong phòng, dùng để bỏ qua tin của chính mình và nhận đúng tin gửi cho mình
+    val selfId: String = UUID.randomUUID().toString().take(8)
+
+    interface SignalingListener {
+        // payload là nội dung tin, luôn có trường "from"
+        fun onMessage(type: String, payload: JSONObject)
+        fun onConnected()
+        fun onDisconnected()
+    }
+
     private var webSocket: WebSocket? = null
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
-
     private val mainHandler = Handler(Looper.getMainLooper())
+
     private val heartbeat = object : Runnable {
         override fun run() {
-            // Realtime của Supabase đóng kết nối nếu không có heartbeat mỗi ~25 giây
-            val ping = JSONObject().apply {
-                put("topic", "phoenix")
-                put("event", "heartbeat")
-                put("payload", JSONObject())
-                put("ref", JSONObject.NULL)
-            }
+            val ping = JSONObject()
+                .put("topic", "phoenix")
+                .put("event", "heartbeat")
+                .put("payload", JSONObject())
+                .put("ref", JSONObject.NULL)
             webSocket?.send(ping.toString())
             mainHandler.postDelayed(this, HEARTBEAT_MS)
         }
-    }
-
-    interface SignalingListener {
-        fun onMessage(type: String, payload: JSONObject)
-        fun onConnected()
-        fun onDisconnected()
     }
 
     fun connect() {
@@ -56,13 +59,16 @@ class SupabaseSignaling(
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket connected")
-                val joinMsg = JSONObject().apply {
-                    put("topic", "realtime:$roomId")
-                    put("event", "phx_join")
-                    put("payload", JSONObject())
-                    put("ref", "1")
-                }
-                ws.send(joinMsg.toString())
+                // self=false: server không gửi lại tin của chính mình
+                val join = JSONObject()
+                    .put("topic", "realtime:$roomId")
+                    .put("event", "phx_join")
+                    .put(
+                        "payload",
+                        JSONObject().put("config", JSONObject().put("broadcast", JSONObject().put("self", false)))
+                    )
+                    .put("ref", "1")
+                ws.send(join.toString())
                 mainHandler.removeCallbacks(heartbeat)
                 mainHandler.postDelayed(heartbeat, HEARTBEAT_MS)
                 listener.onConnected()
@@ -71,12 +77,11 @@ class SupabaseSignaling(
             override fun onMessage(ws: WebSocket, text: String) {
                 try {
                     val json = JSONObject(text)
-                    val event = json.optString("event")
-                    val payload = json.optJSONObject("payload") ?: JSONObject()
-                    if (event == "broadcast" || event == "phx_reply") {
-                        val type = payload.optString("type", event)
-                        listener.onMessage(type, payload)
-                    }
+                    if (json.optString("event") != "broadcast") return
+                    val envelope = json.optJSONObject("payload") ?: return
+                    val name = envelope.optString("event")
+                    val inner = envelope.optJSONObject("payload") ?: JSONObject()
+                    if (name.isNotEmpty()) listener.onMessage(name, inner)
                 } catch (e: Exception) {
                     Log.e(TAG, "Parse message failed", e)
                 }
@@ -96,15 +101,17 @@ class SupabaseSignaling(
         })
     }
 
-    fun sendSignal(type: String, data: JSONObject) {
-        val message = JSONObject().apply {
-            put("topic", "realtime:$roomId")
-            put("event", "broadcast")
-            put("payload", JSONObject().apply {
-                put("type", type)
-                put("data", data)
-            })
-        }
+    // Gửi một tin tới cả phòng. data là các trường của tin, sẽ tự thêm "from".
+    fun send(type: String, data: JSONObject) {
+        val inner = JSONObject(data.toString()).put("from", selfId)
+        val message = JSONObject()
+            .put("topic", "realtime:$roomId")
+            .put("event", "broadcast")
+            .put(
+                "payload",
+                JSONObject().put("type", "broadcast").put("event", type).put("payload", inner)
+            )
+            .put("ref", JSONObject.NULL)
         webSocket?.send(message.toString())
     }
 
