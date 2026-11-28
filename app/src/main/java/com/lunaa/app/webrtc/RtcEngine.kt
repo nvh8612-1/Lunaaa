@@ -196,8 +196,12 @@ class RtcEngine(
         val config = PeerConnection.RTCConfiguration(emptyList()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
-        val a = factory.createPeerConnection(config, observerFor(METER_ID)) ?: return
-        val b = factory.createPeerConnection(config, observerFor(METER_ID)) ?: return
+        val a = factory.createPeerConnection(config, observerFor(METER_ID))
+        val b = factory.createPeerConnection(config, observerFor(METER_ID))
+        if (a == null || b == null) {
+            DiagLog.write("WebRtcSdp", "không tạo được kết nối đo (a=${a != null}, b=${b != null})")
+            return
+        }
         a.addTrack(audioTrack, listOf("lunaa_meter"))
         selfPeerB = b
 
@@ -217,6 +221,16 @@ class RtcEngine(
     }
 
     // Mức âm thanh 0..1 của mình (khóa "self") và của từng người khác (khóa là mã người đó)
+    fun resetSelfMeter() {
+        selfPc?.close()
+        selfPc?.dispose()
+        selfPc = null
+        selfPeerB?.close()
+        selfPeerB?.dispose()
+        selfPeerB = null
+        ensureSelfMeter()
+    }
+
     fun collectLevels(onLevels: (Map<String, Double>) -> Unit) {
         val targets = HashMap(peers)
         val self = selfPc
@@ -318,10 +332,10 @@ class RtcEngine(
             onSet?.invoke()
         }
         override fun onCreateFailure(error: String?) {
-            Log.e(RTC_TAG, "create failed: $error")
+            DiagLog.write("WebRtcSdp", "tạo SDP lỗi: $error")
         }
         override fun onSetFailure(error: String?) {
-            Log.e(RTC_TAG, "set failed: $error")
+            DiagLog.write("WebRtcSdp", "đặt SDP lỗi: $error")
         }
     }
 

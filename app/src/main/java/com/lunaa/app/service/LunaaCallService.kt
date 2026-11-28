@@ -56,6 +56,8 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
     private var callSeconds = 0
     private var localSharing = false
     private var micLogTick = 0
+    private var meterWait = 0
+    private var meterRetries = 0
 
     // peerId -> tên hiển thị, và danh sách người đang chia sẻ màn hình
     private val peers = LinkedHashMap<String, String>()
@@ -66,6 +68,15 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
     // Gửi mức âm thanh lên giao diện 4 lần mỗi giây để hiện viền xanh theo người đang nói
     private val levelRunnable = object : Runnable {
         override fun run() {
+            // Nếu WebRTC chưa thu được mẫu nào sau ~5 giây, thiết lập lại bộ đo (tối đa 3 lần)
+            rtcEngine?.let { engine ->
+                if (engine.sampleCount == 0L && ++meterWait >= 20 && meterRetries < 3) {
+                    meterWait = 0
+                    meterRetries++
+                    com.lunaa.app.DiagLog.write(MIC_TAG, "Chưa có mẫu âm thanh, thiết lập lại bộ đo lần $meterRetries")
+                    engine.resetSelfMeter()
+                }
+            }
             rtcEngine?.collectLevels { levels ->
                 val obj = JSONObject()
                 levels.forEach { (k, v) -> obj.put(k, v) }
@@ -147,6 +158,8 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
         setSpeaker(true)
         val engine = RtcEngine(this, this)
         rtcEngine = engine
+        meterWait = 0
+        meterRetries = 0
         engine.ensureSelfMeter()
         handler.removeCallbacks(levelRunnable)
         handler.post(levelRunnable)
