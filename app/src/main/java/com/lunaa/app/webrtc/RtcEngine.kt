@@ -5,6 +5,9 @@ import android.content.Intent
 import android.media.projection.MediaProjection
 import android.util.Log
 import org.webrtc.*
+import org.webrtc.audio.JavaAudioDeviceModule
+import android.media.MediaRecorder
+import com.lunaa.app.DiagLog
 
 private const val RTC_TAG = "RtcEngine"
 private const val SCREEN_STREAM = "lunaa_screen"
@@ -23,6 +26,7 @@ class RtcEngine(
     }
 
     private val eglBase: EglBase = EglBase.create()
+    private val adm: JavaAudioDeviceModule
     private val factory: PeerConnectionFactory
     private val audioTrack: AudioTrack
     private val peers = HashMap<String, PeerConnection>()
@@ -44,7 +48,16 @@ class RtcEngine(
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions()
         )
+        // Tự cấu hình thiết bị thu âm. Bật AEC/NS phần cứng làm AudioRecord lỗi trên nhiều máy,
+        // khi đó WebRTC không thu được tiếng dù micro vẫn hoạt động.
+        adm = JavaAudioDeviceModule.builder(context)
+            .setUseHardwareAcousticEchoCanceler(false)
+            .setUseHardwareNoiseSuppressor(false)
+            .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            .createAudioDeviceModule()
+        DiagLog.write("WebRtcAudio", "ADM tạo xong, AEC/NS phần cứng đã tắt")
         factory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(adm)
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
@@ -241,6 +254,7 @@ class RtcEngine(
         try {
             audioTrack.dispose()
             factory.dispose()
+            adm.release()
             eglBase.release()
         } catch (e: Exception) {
             Log.e(RTC_TAG, "dispose lỗi", e)

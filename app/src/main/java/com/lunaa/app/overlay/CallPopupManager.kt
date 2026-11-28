@@ -26,6 +26,17 @@ class CallPopupManager(
 ) {
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
+
+    // Chạy trên luồng chính, bắt mọi lỗi để không làm sập app
+    private fun post(block: () -> Unit) {
+        main.post {
+            try {
+                block()
+            } catch (e: Throwable) {
+                DiagLog.write("Popup", "Lỗi ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+    }
     private val density = context.resources.displayMetrics.density
     private fun dp(v: Int): Int = (v * density).toInt()
 
@@ -174,12 +185,12 @@ class CallPopupManager(
     private inner class Bridge {
         @JavascriptInterface
         fun setPopupOpen(on: Boolean) {
-            main.post { applyOpen(on) }
+            post { applyOpen(on) }
         }
 
         @JavascriptInterface
         fun setSide(value: String) {
-            main.post {
+            post {
                 side = if (value == "left") "left" else "right"
                 if (!open) applyOpen(false)
             }
@@ -187,17 +198,17 @@ class CallPopupManager(
 
         @JavascriptInterface
         fun decline() {
-            main.post { onDecline() }
+            post { onDecline() }
         }
 
         @JavascriptInterface
         fun toggleShare() {
-            main.post { onShare() }
+            post { onShare() }
         }
 
         @JavascriptInterface
         fun sendChat(text: String) {
-            main.post { onSend(text) }
+            post { onSend(text) }
         }
     }
 }

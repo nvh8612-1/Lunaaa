@@ -385,7 +385,11 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
         if (localSharing) {
             stopScreenShare()
         } else {
-            startActivity(Intent(this, ScreenShareActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            try {
+                startActivity(Intent(this, ScreenShareActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) {
+                com.lunaa.app.DiagLog.write("Popup", "Không mở được hộp chia sẻ: ${e.message}")
+            }
         }
     }
 
