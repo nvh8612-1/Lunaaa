@@ -1,6 +1,7 @@
 package com.lunaa.app.bridge
 
 import android.webkit.JavascriptInterface
+import com.lunaa.app.service.LunaaCallService
 
 class WebAppBridge(private val callback: BridgeCallback) {
 
@@ -16,26 +17,42 @@ class WebAppBridge(private val callback: BridgeCallback) {
     }
 
     @JavascriptInterface
-    fun createRoom(roomId: String, preset: String) { callback.onRoomCreate(roomId, preset) }
+    fun createRoom(roomId: String, preset: String) {
+        callback.onRoomCreate(roomId, preset)
+    }
 
     @JavascriptInterface
-    fun joinRoom(roomId: String, preset: String) { callback.onRoomJoin(roomId, preset) }
+    fun joinRoom(roomId: String, preset: String) {
+        callback.onRoomJoin(roomId, preset)
+    }
 
     @JavascriptInterface
-    fun leaveRoom() { callback.onLeaveRoom() }
+    fun leaveRoom() {
+        callback.onLeaveRoom()
+    }
 
     @JavascriptInterface
-    fun toggleScreenShare() { callback.onToggleScreenShare() }
+    fun toggleScreenShare() {
+        callback.onToggleScreenShare()
+    }
 
     @JavascriptInterface
-    fun updateAvatar(avatarUrl: String) { callback.onUpdateAvatar(avatarUrl) }
+    fun updateAvatar(avatarUrl: String) {
+        callback.onUpdateAvatar(avatarUrl)
+    }
 
     @JavascriptInterface
-    fun setPreset(preset: String) { callback.onSetPreset(preset) }
+    fun setPreset(preset: String) {
+        callback.onSetPreset(preset)
+    }
 
     @JavascriptInterface
-    fun onUiReady() { callback.onUiReady() }
+    fun onUiReady() {
+        callback.onUiReady()
+    }
 
     @JavascriptInterface
-    fun connectShizuku() { callback.onConnectShizuku() }
+    fun connectShizuku() {
+        callback.onConnectShizuku()
+    }
 }

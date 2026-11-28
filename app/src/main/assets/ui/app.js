@@ -1,5 +1,9 @@
 // Cầu nối giao diện <-> Android. AndroidBridge do MainActivity cung cấp qua WebAppBridge.
 let currentPreset = '780p';
+let callTimerInterval = null;
+let callSeconds = 0;
+let muted = false;
+let deafened = false;
 
 function hasBridge(fn) {
     return !!(window.AndroidBridge && typeof window.AndroidBridge[fn] === 'function');
@@ -28,6 +32,7 @@ function selectPreset(preset, element) {
     });
     element.classList.add('active');
     element.querySelector('input').checked = true;
+    document.getElementById("presetLabel").textContent = element.querySelector('strong').textContent;
     if (hasBridge('setPreset')) window.AndroidBridge.setPreset(preset);
 }
 
@@ -66,7 +71,7 @@ function toggleScreenShare() {
     if (hasBridge('toggleScreenShare')) {
         window.AndroidBridge.toggleScreenShare();
     } else {
-        alert("Chia sẻ màn hình (chỉ có trên app Android)");
+        alert("Chia sẻ màn hình chỉ có trên app Android");
     }
 }
 
@@ -78,16 +83,34 @@ function connectShizuku() {
     }
 }
 
+// Chỉ đổi giao diện. Tắt mic/loa thật cần nối với RtcEngine ở bước sau.
+function toggleMute() {
+    muted = !muted;
+    const btn = document.getElementById("muteBtn");
+    btn.textContent = muted ? "🔇" : "🎤";
+    btn.classList.toggle("on", muted);
+}
+
+function toggleDeafen() {
+    deafened = !deafened;
+    const btn = document.getElementById("deafenBtn");
+    btn.textContent = deafened ? "🔈" : "🎧";
+    btn.classList.toggle("on", deafened);
+}
+
+function toggleSidebar() {
+    document.getElementById("sidebar").classList.toggle("open");
+    document.getElementById("sidebarOverlay").classList.toggle("open");
+}
+
 function generateRoomId() {
     return 'lunaa-' + Math.random().toString(36).substring(2, 8);
 }
 
-let callTimerInterval = null;
-let callSeconds = 0;
-
 // Được gọi từ Kotlin qua evaluateJavascript
 function showCallControls(roomId) {
     document.getElementById("roomStatusText").textContent = `RoomID: ${roomId}`;
+    document.getElementById("topbarRoom").textContent = roomId;
     callSeconds = 0;
     document.getElementById("callTimerText").textContent = "Time: 0:00";
     if (callTimerInterval) clearInterval(callTimerInterval);
@@ -104,5 +127,6 @@ function showCallControls(roomId) {
 function hideCallControls() {
     if (callTimerInterval) clearInterval(callTimerInterval);
     callTimerInterval = null;
+    document.getElementById("topbarRoom").textContent = "Phòng gọi";
     document.getElementById("callCard").style.display = "none";
 }
