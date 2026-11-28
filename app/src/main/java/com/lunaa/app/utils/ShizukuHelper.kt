@@ -1,20 +1,23 @@
 package com.lunaa.app.utils
 
-import rikka.shizuku.Shizuku
 import android.content.pm.PackageManager
-import android.os.Build
+import android.util.Log
+import rikka.shizuku.Shizuku
 
 object ShizukuHelper {
 
-    private val ON_REQUEST_PERMISSION_RESULT_LISTENER = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        // Handle permission request result from Shizuku
-    }
+    private const val TAG = "ShizukuHelper"
+
+    private val onRequestPermissionResultListener =
+        Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+            Log.d(TAG, "Shizuku permission result: request=$requestCode grant=$grantResult")
+        }
 
     init {
         try {
-            Shizuku.addRequestPermissionResultListener(ON_REQUEST_PERMISSION_RESULT_LISTENER)
+            Shizuku.addRequestPermissionResultListener(onRequestPermissionResultListener)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to add Shizuku listener", e)
         }
     }
 
@@ -28,15 +31,9 @@ object ShizukuHelper {
 
     fun hasPermission(): Boolean {
         return try {
-            if (isShizukuAvailable()) {
-                if (Shizuku.isPreV11()) {
-                    false
-                } else {
-                    Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-                }
-            } else {
-                false
-            }
+            if (!isShizukuAvailable()) return false
+            if (Shizuku.isPreV11()) return false
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         } catch (e: Exception) {
             false
         }
@@ -44,28 +41,21 @@ object ShizukuHelper {
 
     fun requestPermission() {
         try {
-            if (isShizukuAvailable() && !hasPermission()) {
-                if (!Shizuku.isPreV11()) {
-                    Shizuku.requestPermission(0)
-                }
+            if (isShizukuAvailable() && !hasPermission() && !Shizuku.isPreV11()) {
+                Shizuku.requestPermission(0)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "requestPermission failed", e)
         }
     }
 
     /**
-     * Use Shizuku service / shell to grant overlay permission or perform privileged operations silently if permitted.
+     * Hiện chưa cấp quyền overlay qua Shizuku.
+     * Shizuku không còn cho phép gọi newProcess trực tiếp từ app.
+     * Muốn chạy lệnh shell đặc quyền, cần bind một UserService của Shizuku.
+     * Hiện tại MainActivity sẽ dùng màn hình cài đặt overlay khi hàm này không cấp quyền.
      */
     fun grantOverlayPermission(packageName: String) {
-        try {
-            if (isShizukuAvailable() && hasPermission()) {
-                val command = "appops set $packageName SYSTEM_ALERT_WINDOW allow"
-                val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
-                process.waitFor()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        Log.w(TAG, "grantOverlayPermission not implemented for $packageName; use system settings")
     }
 }
