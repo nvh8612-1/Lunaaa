@@ -21,6 +21,17 @@ let peerList = [];
 
 function $(id) { return document.getElementById(id); }
 
+const SPEAK_THRESHOLD = 0.02;
+
+// Kotlin gọi 4 lần/giây với JSON {"self":0.1,"<peerId>":0.0}
+function onAudioLevels(json) {
+    const lv = JSON.parse(json);
+    $('selfTile').classList.toggle('speaking', micOn && (lv.self || 0) > SPEAK_THRESHOLD);
+    document.querySelectorAll('.tile.peer').forEach(t => {
+        t.classList.toggle('speaking', (lv[t.dataset.id] || 0) > SPEAK_THRESHOLD);
+    });
+}
+
 function hasBridge(fn) {
     return !!(window.AndroidBridge && typeof window.AndroidBridge[fn] === 'function');
 }
@@ -134,7 +145,6 @@ function renderMic() {
     $('micBtn').classList.toggle('off', !micOn);
     $('miniMicBtn').innerHTML = icon;
     $('tileMicState').innerHTML = icon;
-    $('selfTile').classList.toggle('speaking', micOn);
     $('swMute').checked = !micOn;
 }
 
@@ -180,6 +190,7 @@ function renderTiles() {
     peerList.forEach(p => {
         const tile = document.createElement('div');
         tile.className = 'tile peer';
+        tile.dataset.id = p.id;
         const img = document.createElement('img');
         img.className = 'tile-avatar';
         img.src = avatarOf(p.id);

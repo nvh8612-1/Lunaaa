@@ -77,6 +77,14 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
                 runJs("setScreenState($on);")
             }
             override fun onRemoteVideo(track: VideoTrack?) = attachRemoteVideo(track)
+            override fun onCallEnded() {
+                inCall = false
+                sharing = false
+                attachRemoteVideo(null)
+                runJs("hideCallControls();")
+            }
+            override fun onAudioLevels(json: String) =
+                runJs("onAudioLevels(${JSONObject.quote(json)});")
         }
 
         ShizukuHelper.onPermissionResult = { granted ->
@@ -216,6 +224,9 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
         } else {
             startService(intent)
         }
+        if (!Settings.canDrawOverlays(this)) {
+            toast("Cấp quyền hiển thị trên ứng dụng khác để thấy bong bóng chat khi thu nhỏ")
+        }
         inCall = true
         runJs("showCallControls(${JSONObject.quote(roomId)});")
     }
@@ -307,16 +318,33 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
     }
 
     override fun onConnectShizuku() {
-        when {
-            !ShizukuHelper.isShizukuAvailable() ->
-                toast("Chưa thấy Shizuku. Mở app Shizuku và bấm Start trước")
-            ShizukuHelper.hasPermission() ->
-                toast("Shizuku đã kết nối và có quyền")
-            else -> {
-                ShizukuHelper.requestPermission()
-                toast("Đang xin quyền Shizuku...")
+        // Chờ kết nối vì Shizuku có thể cần vài giây sau khi cấp quyền; không chạy trên luồng chính
+        Thread {
+            val ready = ShizukuHelper.awaitBinder(3000)
+            when {
+                !ready -> toast("Lunaa chưa kết nối được Shizuku. Mở Shizuku, kiểm tra trạng thái Running rồi thử lại")
+                ShizukuHelper.hasPermission() -> toast("Shizuku đã kết nối và có quyền")
+                else -> {
+                    ShizukuHelper.requestPermission()
+                    toast("Hãy cho phép Lunaa trong hộp thoại Shizuku")
+                }
             }
-        }
+        }.start()
+    }
+
+    // Bong bóng chat chỉ hiện khi bạn thoát ra màn hình khác, trong app thì dùng khung chat
+    override fun onStart() {
+        super.onStart()
+        if (inCall) startService(Intent(this, LunaaCallService::class.java).apply {
+            action = LunaaCallService.ACTION_BUBBLE_HIDE
+        })
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (inCall) startService(Intent(this, LunaaCallService::class.java).apply {
+            action = LunaaCallService.ACTION_BUBBLE_SHOW
+        })
     }
 
     override fun onDestroy() {

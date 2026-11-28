@@ -8,6 +8,8 @@ import org.webrtc.*
 
 private const val RTC_TAG = "RtcEngine"
 private const val SCREEN_STREAM = "lunaa_screen"
+private const val METER_ID = "__meter__"
+private const val SELF_KEY = "self"
 
 class RtcEngine(
     private val context: Context,
@@ -30,6 +32,7 @@ class RtcEngine(
     private var screenHelper: SurfaceTextureHelper? = null
     private var screenSource: VideoSource? = null
     private var screenTrack: VideoTrack? = null
+    private var selfPc: PeerConnection? = null
 
     private val iceServers = listOf(
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
@@ -146,6 +149,61 @@ class RtcEngine(
         screenTrack = null
     }
 
+    // ---- Đo mức âm thanh: mic được mở ngay khi vào phòng, kể cả khi chưa có ai khác ----
+
+    // Kết nối riêng, không gửi đi đâu. Mục đích: WebRTC chỉ mở mic khi track đã gắn vào một kết nối.
+    fun ensureSelfMeter() {
+        if (selfPc != null) return
+        val config = PeerConnection.RTCConfiguration(emptyList()).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        }
+        val pc = factory.createPeerConnection(config, observerFor(METER_ID)) ?: return
+        pc.addTrack(audioTrack, listOf("lunaa_meter"))
+        pc.createOffer(
+            SdpAdapter(onCreated = { pc.setLocalDescription(SdpAdapter(), it) }),
+            offerConstraints()
+        )
+        selfPc = pc
+    }
+
+    // Mức âm thanh 0..1 của mình (khóa "self") và của từng người khác (khóa là mã người đó)
+    fun collectLevels(onLevels: (Map<String, Double>) -> Unit) {
+        val targets = HashMap(peers)
+        val self = selfPc
+        val levels = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        val remaining = java.util.concurrent.atomic.AtomicInteger(
+            targets.size + (if (self != null) 1 else 0)
+        )
+        if (remaining.get() == 0) {
+            onLevels(levels)
+            return
+        }
+        fun done() {
+            if (remaining.decrementAndGet() == 0) onLevels(HashMap(levels))
+        }
+        self?.getStats { report ->
+            levels[SELF_KEY] = maxLevel(report, "media-source")
+            done()
+        }
+        targets.forEach { (id, pc) ->
+            pc.getStats { report ->
+                levels[id] = maxLevel(report, "inbound-rtp")
+                done()
+            }
+        }
+    }
+
+    private fun maxLevel(report: RTCStatsReport, type: String): Double {
+        var max = 0.0
+        report.statsMap.values.forEach { s ->
+            if (s.type == type) {
+                val v = s.members["audioLevel"] as? Double
+                if (v != null && v > max) max = v
+            }
+        }
+        return max
+    }
+
     fun removePeer(id: String) {
         senders.remove(id)
         peers.remove(id)?.let {
@@ -156,6 +214,9 @@ class RtcEngine(
 
     fun dispose() {
         stopScreenShare()
+        selfPc?.close()
+        selfPc?.dispose()
+        selfPc = null
         peers.values.forEach {
             it.close()
             it.dispose()
@@ -178,7 +239,7 @@ class RtcEngine(
         override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
 
         override fun onIceCandidate(candidate: IceCandidate?) {
-            candidate?.let { listener.onIceCandidateGenerated(id, it) }
+            if (id != METER_ID) candidate?.let { listener.onIceCandidateGenerated(id, it) }
         }
 
         override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
@@ -193,7 +254,7 @@ class RtcEngine(
         }
 
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
-            newState?.let { listener.onPeerStateChanged(id, it) }
+            if (id != METER_ID) newState?.let { listener.onPeerStateChanged(id, it) }
         }
     }
 

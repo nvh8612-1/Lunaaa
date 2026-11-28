@@ -45,6 +45,12 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone|camera" />
 
+        <activity
+            android:name=".ScreenShareActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
     </application>
 
 </manifest>

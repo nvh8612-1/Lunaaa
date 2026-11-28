@@ -9,15 +9,21 @@ object ShizukuHelper {
     private const val TAG = "ShizukuHelper"
     private const val REQUEST_CODE = 1001
 
-    // MainActivity gán hàm này để hiện thông báo khi người dùng bấm Cho phép/Từ chối
+    // MainActivity gán hàm này để báo kết quả khi người dùng bấm Cho phép/Từ chối
     @Volatile
     var onPermissionResult: ((Boolean) -> Unit)? = null
 
-    private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
+    // Được cập nhật bởi listener: pingBinder có thể trả false ngay sau khi Shizuku vừa khởi động
+    @Volatile
+    private var binderReady = false
+
+    private val binderReceived = Shizuku.OnBinderReceivedListener {
+        binderReady = true
         Log.d(TAG, "Shizuku binder received")
     }
 
-    private val binderDeadListener = Shizuku.OnBinderDeadListener {
+    private val binderDead = Shizuku.OnBinderDeadListener {
+        binderReady = false
         Log.d(TAG, "Shizuku binder dead")
     }
 
@@ -29,19 +35,31 @@ object ShizukuHelper {
 
     init {
         try {
-            // Sticky: nhận binder ngay cả khi Shizuku đã chạy trước khi app mở
-            Shizuku.addBinderReceivedListenerSticky(binderReceivedListener)
-            Shizuku.addBinderDeadListener(binderDeadListener)
+            Shizuku.addBinderReceivedListenerSticky(binderReceived)
+            Shizuku.addBinderDeadListener(binderDead)
             Shizuku.addRequestPermissionResultListener(permissionListener)
         } catch (e: Throwable) {
             Log.e(TAG, "Đăng ký listener Shizuku thất bại", e)
         }
     }
 
-    fun isShizukuAvailable(): Boolean = try {
-        Shizuku.pingBinder()
-    } catch (e: Throwable) {
-        false
+    fun isShizukuAvailable(): Boolean {
+        if (binderReady) return true
+        return try {
+            Shizuku.pingBinder()
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
+    // Chờ Shizuku kết nối tối đa timeoutMs. Gọi từ luồng nền, không gọi trên luồng chính.
+    fun awaitBinder(timeoutMs: Long): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            if (isShizukuAvailable()) return true
+            Thread.sleep(200)
+        }
+        return isShizukuAvailable()
     }
 
     fun hasPermission(): Boolean = try {
@@ -61,8 +79,7 @@ object ShizukuHelper {
         }
     }
 
-    // Shizuku không cho app gọi newProcess trực tiếp nữa.
-    // Muốn cấp quyền overlay tự động cần bind UserService của Shizuku.
+    // Shizuku không cho app gọi newProcess trực tiếp. Muốn cấp quyền overlay tự động cần UserService.
     fun grantOverlayPermission(packageName: String) {
         Log.w(TAG, "grantOverlayPermission chưa làm cho $packageName, dùng màn hình cài đặt")
     }

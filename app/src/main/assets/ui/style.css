@@ -225,3 +225,6 @@ html, body { background: transparent; }
 .tiles.has-screen { grid-template-columns: 1fr; }
 .tiles.has-screen .tile.screen { grid-column: 1 / -1; grid-row: span 2; }
 .ctrl.active { background: var(--blurple); color: #fff; }
+
+/* Viền xanh theo người đang nói */
+.tile.speaking { border-color: var(--green); }
