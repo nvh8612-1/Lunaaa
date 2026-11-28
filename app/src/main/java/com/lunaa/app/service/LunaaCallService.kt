@@ -73,7 +73,7 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
                 if (++micLogTick % 8 == 0) {
                     val perm = checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
                         PackageManager.PERMISSION_GRANTED
-                    com.lunaa.app.DiagLog.write(MIC_TAG, "self=${levels["self"]} peers=${levels.size - 1} micPerm=$perm")
+                    com.lunaa.app.DiagLog.write(MIC_TAG, "self=${levels["self"]} peers=${levels.size - 1} micPerm=$perm samples=${rtcEngine?.sampleCount}")
                 }
                 callPopup?.setVoice(obj.toString())
                 uiListener?.onAudioLevels(obj.toString())

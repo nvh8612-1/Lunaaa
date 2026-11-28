@@ -323,7 +323,7 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
             val ready = ShizukuHelper.awaitBinder(3000)
             com.lunaa.app.DiagLog.write("Shizuku", "binder=$ready perm=${ShizukuHelper.hasPermission()}")
             when {
-                !ready -> toast("Lunaa chưa kết nối được Shizuku. Mở Shizuku, kiểm tra trạng thái Running rồi thử lại")
+                !ready -> toast("Shizuku đang dừng. Cấp quyền không đủ: mở Shizuku và khởi động dịch vụ (Start) trước")
                 ShizukuHelper.hasPermission() -> toast("Shizuku đã kết nối và có quyền")
                 else -> {
                     ShizukuHelper.requestPermission()

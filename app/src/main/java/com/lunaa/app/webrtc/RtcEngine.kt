@@ -27,6 +27,30 @@ class RtcEngine(
 
     private val eglBase: EglBase = EglBase.create()
     private val adm: JavaAudioDeviceModule
+
+    // Số lần WebRTC đưa mẫu âm thanh thu được. Bằng 0 nghĩa là bộ thu chưa chạy.
+    @Volatile
+    var sampleCount = 0L
+        private set
+
+    // Mức âm thanh mới nhất của micro, 0..1, tính từ mẫu PCM 16-bit
+    @Volatile
+    private var localLevel = 0.0
+
+    private fun onSamples(samples: JavaAudioDeviceModule.AudioSamples) {
+        sampleCount++
+        if (sampleCount == 1L) DiagLog.write("WebRtcAudio", "Đã nhận mẫu âm thanh đầu tiên")
+        val data = samples.data
+        var peak = 0
+        var i = 0
+        while (i + 1 < data.size) {
+            val v = ((data[i].toInt() and 0xFF) or (data[i + 1].toInt() shl 8)).toShort().toInt()
+            val a = if (v < 0) -v else v
+            if (a > peak) peak = a
+            i += 2
+        }
+        localLevel = peak / 32768.0
+    }
     private val factory: PeerConnectionFactory
     private val audioTrack: AudioTrack
     private val peers = HashMap<String, PeerConnection>()
@@ -54,6 +78,7 @@ class RtcEngine(
             .setUseHardwareAcousticEchoCanceler(false)
             .setUseHardwareNoiseSuppressor(false)
             .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            .setSamplesReadyCallback(JavaAudioDeviceModule.SamplesReadyCallback { samples -> onSamples(samples) })
             .createAudioDeviceModule()
         DiagLog.write("WebRtcAudio", "ADM tạo xong, AEC/NS phần cứng đã tắt")
         factory = PeerConnectionFactory.builder()
@@ -196,19 +221,14 @@ class RtcEngine(
         val targets = HashMap(peers)
         val self = selfPc
         val levels = java.util.concurrent.ConcurrentHashMap<String, Double>()
-        val remaining = java.util.concurrent.atomic.AtomicInteger(
-            targets.size + (if (self != null) 1 else 0)
-        )
+        levels[SELF_KEY] = localLevel
+        val remaining = java.util.concurrent.atomic.AtomicInteger(targets.size)
         if (remaining.get() == 0) {
             onLevels(levels)
             return
         }
         fun done() {
             if (remaining.decrementAndGet() == 0) onLevels(HashMap(levels))
-        }
-        self?.getStats { report ->
-            levels[SELF_KEY] = maxLevel(report, "media-source")
-            done()
         }
         targets.forEach { (id, pc) ->
             pc.getStats { report ->

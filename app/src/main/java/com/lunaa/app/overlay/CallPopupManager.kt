@@ -95,7 +95,7 @@ class CallPopupManager(
         }
         if (!Settings.canDrawOverlays(context)) return
 
-        val view = WebView(context).apply {
+        val view = WebView(context.applicationContext).apply {
             setBackgroundColor(Color.TRANSPARENT)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -109,7 +109,13 @@ class CallPopupManager(
             loadUrl("file:///android_asset/popup/index.html")
         }
         webView = view
-        wm.addView(view, bubbleParams())
+        try {
+            wm.addView(view, bubbleParams())
+        } catch (e: Exception) {
+            webView = null
+            view.destroy()
+            throw e
+        }
         attached = true
         open = false
     }
