@@ -19,6 +19,7 @@
     </queries>
 
     <application
+        android:name=".LunaaApp"
         android:allowBackup="true"
         android:label="Lunaa"
         android:supportsRtl="true"

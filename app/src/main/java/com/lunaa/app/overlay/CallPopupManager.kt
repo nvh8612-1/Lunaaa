@@ -14,6 +14,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import org.json.JSONObject
+import com.lunaa.app.DiagLog
 
 // Popup nổi: hiển thị assets/popup/index.html trong cửa sổ overlay.
 // Chế độ bong bóng: cửa sổ hẹp sát mép phải/trái. Chế độ mở: cửa sổ toàn màn hình.
@@ -65,8 +66,17 @@ class CallPopupManager(
     }
 
     // Hiện bong bóng. Gọi lại khi đang hiện thì chỉ cập nhật tên phòng.
-    @SuppressLint("SetJavaScriptEnabled")
     fun show(roomId: String) {
+        try {
+            showInner(roomId)
+        } catch (e: Throwable) {
+            DiagLog.write("Popup", "Hiện popup lỗi: ${e.javaClass.simpleName} ${e.message}")
+            hide()
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showInner(roomId: String) {
         lastRoom = roomId
         if (attached) {
             exec("setRoom(${JSONObject.quote(roomId)});")

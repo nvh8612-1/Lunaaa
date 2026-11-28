@@ -91,6 +91,11 @@ function selectPreset(preset, el) {
     if (hasBridge('setPreset')) window.AndroidBridge.setPreset(preset);
 }
 
+function testMic() {
+    if (hasBridge('testMic')) window.AndroidBridge.testMic();
+    else alert('Kiểm tra micro chỉ có trên app Android');
+}
+
 function generateRoomId() {
     return 'lunaa-' + Math.random().toString(36).substring(2, 8);
 }

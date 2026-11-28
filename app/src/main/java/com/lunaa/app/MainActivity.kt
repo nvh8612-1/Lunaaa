@@ -321,6 +321,7 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
         // Chờ kết nối vì Shizuku có thể cần vài giây sau khi cấp quyền; không chạy trên luồng chính
         Thread {
             val ready = ShizukuHelper.awaitBinder(3000)
+            com.lunaa.app.DiagLog.write("Shizuku", "binder=$ready perm=${ShizukuHelper.hasPermission()}")
             when {
                 !ready -> toast("Lunaa chưa kết nối được Shizuku. Mở Shizuku, kiểm tra trạng thái Running rồi thử lại")
                 ShizukuHelper.hasPermission() -> toast("Shizuku đã kết nối và có quyền")
@@ -345,6 +346,50 @@ class MainActivity : AppCompatActivity(), WebAppBridge.BridgeCallback {
         if (inCall) startService(Intent(this, LunaaCallService::class.java).apply {
             action = LunaaCallService.ACTION_BUBBLE_SHOW
         })
+    }
+
+    // Mở micro trực tiếp (không qua WebRTC) để biết phần cứng có thu được tiếng không
+    override fun onTestMic() {
+        Thread {
+            val result = micProbe()
+            com.lunaa.app.DiagLog.write("MicTest", result)
+            toast(result)
+        }.start()
+    }
+
+    private fun micProbe(): String {
+        if (!hasMic()) return "Chưa có quyền micro cho Lunaa"
+        val rate = 16000
+        val minBuf = android.media.AudioRecord.getMinBufferSize(
+            rate, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT
+        )
+        if (minBuf <= 0) return "Thiết bị không hỗ trợ ghi âm (minBuf=$minBuf)"
+        val rec = android.media.AudioRecord(
+            android.media.MediaRecorder.AudioSource.MIC, rate,
+            android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, minBuf * 2
+        )
+        if (rec.state != android.media.AudioRecord.STATE_INITIALIZED) {
+            rec.release()
+            return "Không mở được micro. Đóng app khác đang dùng mic (kể cả đang trong phòng)"
+        }
+        rec.startRecording()
+        val buf = ShortArray(minBuf)
+        var peak = 0
+        val end = System.currentTimeMillis() + 2000
+        while (System.currentTimeMillis() < end) {
+            val n = rec.read(buf, 0, buf.size)
+            for (i in 0 until n.coerceAtLeast(0)) {
+                val a = kotlin.math.abs(buf[i].toInt())
+                if (a > peak) peak = a
+            }
+        }
+        rec.stop()
+        rec.release()
+        return if (peak > 300) {
+            "Micro hoạt động (đỉnh=$peak). Lỗi nằm ở đường WebRTC"
+        } else {
+            "Micro không có tín hiệu (đỉnh=$peak). Kiểm tra quyền micro và app khác đang chiếm mic"
+        }
     }
 
     override fun onDestroy() {

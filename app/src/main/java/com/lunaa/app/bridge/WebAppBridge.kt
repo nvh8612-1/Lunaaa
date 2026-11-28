@@ -17,6 +17,7 @@ class WebAppBridge(private val callback: BridgeCallback) {
         fun onSpeakerToggle(on: Boolean)
         fun onSendChat(text: String)
         fun onVideoRect(x: Double, y: Double, w: Double, h: Double)
+        fun onTestMic()
     }
 
     @JavascriptInterface
@@ -54,4 +55,7 @@ class WebAppBridge(private val callback: BridgeCallback) {
 
     @JavascriptInterface
     fun setVideoRect(x: Double, y: Double, w: Double, h: Double) { callback.onVideoRect(x, y, w, h) }
+
+    @JavascriptInterface
+    fun testMic() { callback.onTestMic() }
 }
