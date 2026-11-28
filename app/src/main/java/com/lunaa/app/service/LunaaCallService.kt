@@ -1,5 +1,7 @@
 package com.lunaa.app.service
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -16,7 +18,6 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.lunaa.app.overlay.CallPopupManager
-import com.lunaa.app.overlay.ChatBubbleManager
 import com.lunaa.app.ScreenShareActivity
 import com.lunaa.app.overlay.FloatingPopupManager
 import com.lunaa.app.signaling.SupabaseSignaling
@@ -43,7 +44,6 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
     }
 
     private var popupManager: FloatingPopupManager? = null
-    private var chatBubble: ChatBubbleManager? = null
     private var callPopup: CallPopupManager? = null
     private var signaling: SupabaseSignaling? = null
     private var rtcEngine: RtcEngine? = null
@@ -55,6 +55,7 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
     private var userLeft = false
     private var callSeconds = 0
     private var localSharing = false
+    private var micLogTick = 0
 
     // peerId -> tên hiển thị, và danh sách người đang chia sẻ màn hình
     private val peers = LinkedHashMap<String, String>()
@@ -68,6 +69,13 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
             rtcEngine?.collectLevels { levels ->
                 val obj = JSONObject()
                 levels.forEach { (k, v) -> obj.put(k, v) }
+                // Log mỗi 2 giây để kiểm tra mic: lọc logcat bằng từ khóa MicDebug
+                if (++micLogTick % 8 == 0) {
+                    val perm = checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                        PackageManager.PERMISSION_GRANTED
+                    Log.d(MIC_TAG, "self=${levels["self"]} peers=${levels.size - 1} micPerm=$perm")
+                }
+                callPopup?.setVoice(obj.toString())
                 uiListener?.onAudioLevels(obj.toString())
             }
             handler.postDelayed(this, 250)
@@ -86,8 +94,12 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
     override fun onCreate() {
         super.onCreate()
         popupManager = FloatingPopupManager(this)
-        chatBubble = ChatBubbleManager(this) { text -> sendChat(text) }
-        callPopup = CallPopupManager(this, onDecline = { endCallFromPopup() }, onShare = { toggleShareFromPopup() })
+        callPopup = CallPopupManager(
+            this,
+            onDecline = { endCallFromPopup() },
+            onShare = { toggleShareFromPopup() },
+            onSend = { text -> sendChat(text) }
+        )
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         val notification = createNotification("Lunaa Call", "Đang khởi tạo...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -120,14 +132,10 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
             ACTION_START_SCREEN_SHARE -> startScreenShare(i)
             ACTION_STOP_SCREEN_SHARE -> stopScreenShare()
             ACTION_BUBBLE_SHOW -> if (rtcEngine != null) {
-                chatBubble?.show()
                 callPopup?.show(currentRoomId)
                 callPopup?.setSharing(localSharing)
             }
-            ACTION_BUBBLE_HIDE -> {
-                chatBubble?.hide()
-                callPopup?.hide()
-            }
+            ACTION_BUBBLE_HIDE -> callPopup?.hide()
         }
         return START_STICKY
     }
@@ -148,8 +156,7 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
 
     private fun teardownCall() {
         handler.removeCallbacks(levelRunnable)
-        chatBubble?.reset()
-        callPopup?.hide()
+        callPopup?.reset()
         signaling?.disconnect()
         signaling = null
         rtcEngine?.dispose()
@@ -357,11 +364,12 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
                     .put("sharing", sharingPeers.contains(id))
             )
         }
+        callPopup?.setParticipants(arr.toString())
         uiListener?.onParticipants(arr.toString())
     }
 
     private fun emitChat(name: String, text: String, self: Boolean) {
-        chatBubble?.addMessage(name, text, self)
+        callPopup?.addChat(name, text, self)
         uiListener?.onChat(JSONObject().put("name", name).put("text", text).put("self", self).toString())
     }
 
@@ -468,12 +476,13 @@ class LunaaCallService : Service(), SupabaseSignaling.SignalingListener, RtcEngi
         if (!userLeft && currentRoomId.isNotEmpty()) {
             sendRejoinNotification()
         }
-        chatBubble?.reset()
+        callPopup?.reset()
         super.onDestroy()
     }
 
     companion object {
         private const val TAG = "LunaaCallService"
+        private const val MIC_TAG = "MicDebug"
 
         @Volatile
         var uiListener: UiListener? = null

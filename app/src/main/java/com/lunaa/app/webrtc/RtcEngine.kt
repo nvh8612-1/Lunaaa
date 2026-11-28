@@ -33,6 +33,7 @@ class RtcEngine(
     private var screenSource: VideoSource? = null
     private var screenTrack: VideoTrack? = null
     private var selfPc: PeerConnection? = null
+    private var selfPeerB: PeerConnection? = null
 
     private val iceServers = listOf(
         PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
@@ -157,13 +158,24 @@ class RtcEngine(
         val config = PeerConnection.RTCConfiguration(emptyList()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
-        val pc = factory.createPeerConnection(config, observerFor(METER_ID)) ?: return
-        pc.addTrack(audioTrack, listOf("lunaa_meter"))
-        pc.createOffer(
-            SdpAdapter(onCreated = { pc.setLocalDescription(SdpAdapter(), it) }),
-            offerConstraints()
-        )
-        selfPc = pc
+        val a = factory.createPeerConnection(config, observerFor(METER_ID)) ?: return
+        val b = factory.createPeerConnection(config, observerFor(METER_ID)) ?: return
+        a.addTrack(audioTrack, listOf("lunaa_meter"))
+        selfPeerB = b
+
+        // Đàm phán đủ offer/answer giữa a và b (không qua mạng). WebRTC chỉ mở mic khi đã đàm phán xong.
+        a.createOffer(SdpAdapter(onCreated = { offer ->
+            a.setLocalDescription(SdpAdapter(onSet = {
+                b.setRemoteDescription(SdpAdapter(onSet = {
+                    b.createAnswer(SdpAdapter(onCreated = { answer ->
+                        b.setLocalDescription(SdpAdapter(onSet = {
+                            a.setRemoteDescription(SdpAdapter(), answer)
+                        }), answer)
+                    }), offerConstraints())
+                }), offer)
+            }), offer)
+        }), offerConstraints())
+        selfPc = a
     }
 
     // Mức âm thanh 0..1 của mình (khóa "self") và của từng người khác (khóa là mã người đó)
@@ -217,6 +229,9 @@ class RtcEngine(
         selfPc?.close()
         selfPc?.dispose()
         selfPc = null
+        selfPeerB?.close()
+        selfPeerB?.dispose()
+        selfPeerB = null
         peers.values.forEach {
             it.close()
             it.dispose()

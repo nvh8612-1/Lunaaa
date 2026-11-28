@@ -22,10 +22,30 @@ let peerList = [];
 function $(id) { return document.getElementById(id); }
 
 const SPEAK_THRESHOLD = 0.02;
+let micSince = 0;
+let micSignal = false;
+let lastSelf = 0;
+
+// Báo trạng thái mic ngay trên màn hình để biết mic có nhận tiếng hay không
+function updateMicStatus(v) {
+    const el = $('micStatus');
+    if (!el) return;
+    if (v > 0.001) micSignal = true;
+    if (!micOn) {
+        el.textContent = 'Mic đang tắt';
+    } else if (micSignal) {
+        el.textContent = 'Mic đang hoạt động';
+    } else if (micSince && Date.now() - micSince > 4000) {
+        el.textContent = 'Chưa nhận tiếng từ micro. Kiểm tra quyền micro của Lunaa trong Cài đặt điện thoại.';
+    } else {
+        el.textContent = 'Đang kiểm tra micro...';
+    }
+}
 
 // Kotlin gọi 4 lần/giây với JSON {"self":0.1,"<peerId>":0.0}
 function onAudioLevels(json) {
     const lv = JSON.parse(json);
+    lastSelf = lv.self || 0;
     $('selfTile').classList.toggle('speaking', micOn && (lv.self || 0) > SPEAK_THRESHOLD);
     document.querySelectorAll('.tile.peer').forEach(t => {
         t.classList.toggle('speaking', (lv[t.dataset.id] || 0) > SPEAK_THRESHOLD);
@@ -299,6 +319,8 @@ function showCallControls(roomId) {
     if (timerId) clearInterval(timerId);
     timerId = setInterval(() => { callSeconds++; updateTimer(); }, 1000);
 
+    micSince = Date.now();
+    micSignal = false;
     setMic(true);
     setSpeakerState(true);
     if (hasBridge('onSpeakerToggle')) window.AndroidBridge.onSpeakerToggle(true);
@@ -315,6 +337,8 @@ function hideCallControls() {
     peerList = [];
     renderTiles();
     setScreenState(false);
+    $('micStatus').textContent = '';
+    micSince = 0;
     $('sheet').classList.remove('open');
     $('chatPanel').classList.remove('open');
     $('chatList').innerHTML = '';
@@ -328,4 +352,5 @@ function updateTimer() {
     const t = `${m}:${s < 10 ? '0' : ''}${s}`;
     $('callTimerText').textContent = 'Time: ' + t;
     $('miniTime').textContent = t;
+    updateMicStatus(lastSelf);
 }

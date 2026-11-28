@@ -228,3 +228,5 @@ html, body { background: transparent; }
 
 /* Viền xanh theo người đang nói */
 .tile.speaking { border-color: var(--green); }
+
+.mic-status { margin-top: 6px; color: var(--muted); font-size: 12px; text-align: center; padding: 0 16px; }
